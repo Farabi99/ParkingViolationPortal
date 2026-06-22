@@ -1,0 +1,171 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: parking_postgres
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: parking_portal
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d parking_portal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: parking_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672" # Management UI
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    container_name: parking_minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # API
+      - "9001:9001" # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: parking_redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: ./backend
+      args:
+        SERVICE_NAME: api-gateway
+    container_name: parking_api_gateway
+    ports:
+      - "8085:8080"
+    depends_on:
+      - auth-service
+      - violation-service
+      - rule-service
+      - payment-service
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:8081
+      - VIOLATION_SERVICE_URL=http://violation-service:8082
+      - RULE_SERVICE_URL=http://rule-service:8083
+      - PAYMENT_SERVICE_URL=http://payment-service:8084
+      - JWT_SECRET=${JWT_SECRET}
+
+  auth-service:
+    build:
+      context: ./backend
+      args:
+        SERVICE_NAME: auth-service
+    container_name: parking_auth_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_URL=postgres://root:${POSTGRES_PASSWORD}@postgres:5432/parking_portal?sslmode=disable
+      - JWT_SECRET=${JWT_SECRET}
+      - REDIS_ADDR=redis:6379
+
+  violation-service:
+    build:
+      context: ./backend
+      args:
+        SERVICE_NAME: violation-service
+    container_name: parking_violation_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - DB_URL=postgres://root:${POSTGRES_PASSWORD}@postgres:5432/parking_portal?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - MINIO_ENDPOINT=minio:9000
+      # Needed for frontend to reach minio through presigned URL since it resolves locally on the browser
+      - MINIO_BROWSER_URL=localhost
+      - TZ=Asia/Jakarta
+
+  rule-service:
+    build:
+      context: ./backend
+      args:
+        SERVICE_NAME: rule-service
+    container_name: parking_rule_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_URL=postgres://root:${POSTGRES_PASSWORD}@postgres:5432/parking_portal?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_ADDR=redis:6379
+      - TZ=Asia/Jakarta
+
+  payment-service:
+    build:
+      context: ./backend
+      args:
+        SERVICE_NAME: payment-service
+    container_name: parking_payment_service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DB_URL=postgres://root:${POSTGRES_PASSWORD}@postgres:5432/parking_portal?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_URL=redis://redis:6379/0
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: parking_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
+  minio_data:
