@@ -1,0 +1,31 @@
+parking violation portal:
+
+Prerequisites:Backend golang modular, frontend plain react with typescript, theres api gateway single entrypoint, use supporting tools (DB, message broker, Redis, object storage)
+A single web app for Officer and Member roles
+
+Services:
+Auth
+Violation CRUD
+Fine Calculation
+Fine Rule CRUD
+Payment 
+Transaction History
+
+Pages:
+Login
+Violation upload
+Rule change 
+Transactions
+Payment
+
+Data(separate schema):
+Violation: id, license plate, violation type, location, timestamp, photo url
+Fine Rule: version, active from, rules(json object) 
+User: id, username, email, hashed pass, role
+Member Vehicle: member id, license plate
+Transaction: id, violation id, amount, status
+
+addition:
+idempotency
+expiring photo url
+image file validation
